@@ -1,8 +1,8 @@
-// Import the necessary Firebase functions
+// Import Firebase SDK
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js";
 import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
 
-// Your web app's Firebase configuration
+// Firebase Configuration
 const firebaseConfig = {
   apiKey: "AIzaSyA_PxbnrROxqzGs4yNu3opkWhHXeBxPhCw",
   authDomain: "studytask-a3f7b.firebaseapp.com",
@@ -14,161 +14,163 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);  // Initialize Firestore
+const db = getFirestore(app);
 
-// Global variable to store tasks
+// Global Variables
 let tasks = [];
+let taskTimers = {}; // Store timers
 
-// Function to add tasks to Firestore
+// Add Task
 async function addTask(task) {
   try {
     const docRef = await addDoc(collection(db, "tasks"), {
       task: task,
-      completed: false
+      completed: false,
+      time: 0
     });
-    console.log("Task added with ID: ", docRef.id);
-    loadTasks();  // Reload tasks after adding
+    console.log("Task added: ", docRef.id);
+    loadTasks();
   } catch (e) {
     console.error("Error adding task: ", e);
   }
 }
 
-// Function to get tasks from Firestore
+// Get Tasks
 async function getTasks() {
   const querySnapshot = await getDocs(collection(db, "tasks"));
-  const tasksArray = [];
-  querySnapshot.forEach((doc) => {
-    tasksArray.push({ id: doc.id, ...doc.data() });
-  });
-  return tasksArray;
+  return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
-// Function to update task status in Firestore
+// Update Task Status
 async function updateTaskStatus(taskId, completed) {
-  const taskRef = doc(db, "tasks", taskId);
-  await updateDoc(taskRef, {
-    completed: completed
-  });
-  loadTasks(); // Reload tasks after updating
+  await updateDoc(doc(db, "tasks", taskId), { completed });
+  loadTasks();
 }
 
-// Function to delete task from Firestore
+// Delete Task
 async function deleteTask(taskId) {
-  const taskRef = doc(db, "tasks", taskId);
-  await deleteDoc(taskRef);
-  loadTasks(); // Reload tasks after deleting
+  await deleteDoc(doc(db, "tasks", taskId));
+  loadTasks();
 }
 
-// Function to load tasks and update the UI
+// Load Tasks
 async function loadTasks() {
-  tasks = await getTasks();  // Reload tasks from Firestore
-  updateTaskList();  // Refresh task list in UI
+  tasks = await getTasks();
+  updateTaskList();
 }
 
-// Function to render the task list
+// Update UI
 function updateTaskList() {
-  $('#task-ul').empty();  // Clear existing tasks in the UI
+  $('#task-ul').empty();
   tasks.forEach((task, index) => {
     $('#task-ul').append(`
       <li>
         <input type="checkbox" class="task-checkbox" data-index="${index}" ${task.completed ? 'checked' : ''} />
         <span class="task-text">${task.task}</span>
+        
+        <input type="number" class="task-timer" id="timer-${index}" min="1" placeholder="Min">
+        <button class="start-timer" data-index="${index}">Start</button>
+        
+        <div class="progress-container">
+          <div class="progress-bar" id="progress-${index}" style="width: 0%;"></div>
+        </div>
+
         <button class="delete-task" data-index="${index}">Delete</button>
       </li>
     `);
   });
 }
 
-// Task checkbox toggle
+// Task Checkbox Toggle
 $(document).on('change', '.task-checkbox', function () {
   const index = $(this).data('index');
-  const taskId = tasks[index].id;
-  const completed = this.checked;
-  tasks[index].completed = completed;
-  updateTaskStatus(taskId, completed);  // Update task in Firestore
-  updateProgressBar();  // Update progress bar after task change
+  updateTaskStatus(tasks[index].id, this.checked);
+  updateProgressBar();
 });
 
-// Delete task
+// Delete Task
 $(document).on('click', '.delete-task', function () {
-  const index = $(this).data('index');
-  const taskId = tasks[index].id;
-  deleteTask(taskId);  // Delete task from Firestore
+  deleteTask(tasks[$(this).data('index')].id);
 });
 
-// Add task
+// Add Task Button
 $('#add-task').click(function () {
   let task = $('#new-task').val().trim();
   if (task) {
-    addTask(task);  // Add new task to Firestore
-    $('#new-task').val(''); // Clear the input field
+    addTask(task);
+    $('#new-task').val('');
   }
 });
 
-// Update progress bar based on completed tasks
-function updateProgressBar() {
-  const completedTasks = tasks.filter(task => task.completed).length;
-  const progress = (completedTasks / tasks.length) * 100;
-  $('#progress-bar').css('width', progress + '%');
-
-  if (progress === 100) {
-    playSound('victory'); // Play victory sound when all tasks are completed
-    showVictoryMessage();
+// Timer Functionality
+$(document).on('click', '.start-timer', function () {
+  const index = $(this).data('index');
+  const timerInput = $(`#timer-${index}`).val();
+  const taskId = tasks[index].id;
+  
+  if (!taskTimers[index] || taskTimers[index].paused) {
+    if (timerInput && timerInput > 0) {
+      startTimer(index, timerInput * 60, taskId);
+      $(this).text('Pause');
+    }
+  } else {
+    pauseTimer(index);
+    $(this).text('Resume');
   }
+});
+
+// Start Timer
+function startTimer(index, duration, taskId) {
+  let timeRemaining = duration;
+  taskTimers[index] = { time: timeRemaining, paused: false };
+
+  taskTimers[index].interval = setInterval(() => {
+    if (taskTimers[index].paused) return;
+    timeRemaining--;
+    taskTimers[index].time = timeRemaining;
+    
+    let progress = ((duration - timeRemaining) / duration) * 100;
+    $(`#progress-${index}`).css('width', `${progress}%`);
+
+    if (timeRemaining <= 0) {
+      clearInterval(taskTimers[index].interval);
+      playSound('task-complete');
+      deleteTask(taskId);
+    }
+  }, 1000);
 }
 
-// Play sound (either task-complete or victory)
+// Pause Timer
+function pauseTimer(index) {
+  taskTimers[index].paused = !taskTimers[index].paused;
+}
+
+// Progress Bar
+function updateProgressBar() {
+  const completedTasks = tasks.filter(task => task.completed).length;
+  $('#progress-bar').css('width', `${(completedTasks / tasks.length) * 100}%`);
+}
+
+// Play Sound
 function playSound(type) {
-  let sound;
-  if (type === 'task-complete') {
-    sound = new Audio('static/task.wav'); // Ensure correct file path
-  } else if (type === 'victory') {
-    sound = new Audio('static/victory.wav'); // Ensure correct file path
-  }
+  let sound = new Audio(type === 'task-complete' ? 'static/task.wav' : 'static/victory.wav');
   sound.play();
 }
 
-// Show "VICTORY" message for 7 seconds
+// Victory Message
 function showVictoryMessage() {
-    $('#victory-message').show();
-    setTimeout(async function () {
-        $('#victory-message').hide();
-        
-        // Clear tasks after victory in UI and Firestore
-        tasks = [];  // Clear the local tasks array
-        updateTaskList();  // Ensure UI is cleared
-        updateProgressBar(); // Reset progress bar
-
-        // Delete all tasks from Firestore
-        await deleteAllTasks(); // Ensure tasks are deleted from Firestore
-        loadTasks();  // Reload tasks to confirm everything is cleared
-    }, 7000);
+  $('#victory-message').show();
+  setTimeout(() => {
+    $('#victory-message').hide();
+    deleteAllTasks();
+  }, 7000);
 }
 
-// Function to reset all tasks' completed status in Firestore
-async function resetTaskCompletion() {
-    const querySnapshot = await getDocs(collection(db, "tasks"));
-    querySnapshot.forEach(async (doc) => {
-        const taskRef = doc(db, "tasks", doc.id);
-        await updateDoc(taskRef, {
-            completed: false // Reset completed status
-        });
-    });
-}
-
-// Function to delete all tasks from Firestore
+// Delete All Tasks
 async function deleteAllTasks() {
-    const querySnapshot = await getDocs(collection(db, "tasks"));
-    querySnapshot.forEach(async (doc) => {
-        const taskRef = doc(db, "tasks", doc.id);
-        await deleteDoc(taskRef);  // Delete each task from Firestore
-    });
-    tasks = [];  // Clear the local tasks array after deletion
-    updateTaskList();  // Clear the UI task list
+  const querySnapshot = await getDocs(collection(db, "tasks"));
+  querySnapshot.forEach(async (doc) => {
+    await deleteDoc(doc.ref);
+  });
+  loadTasks();
 }
-
-// Function to clear tasks when page reloads (on refresh)
-window.onbeforeunload = async function () {
-    // Ensure tasks are reloaded from Firestore on page refresh
-    loadTasks();
-};
